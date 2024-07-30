@@ -721,7 +721,7 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         return false;
     }
 
-    if (shouldLimitTypeSizes() && !ValidateTypeSizeLimitations(root, &mSymbolTable, &mDiagnostics))
+    if (shouldLimitTypeSizes() && !ValidateTypeSizeLimitations(mResources, root, &mSymbolTable, &mDiagnostics))
     {
         return false;
     }
@@ -1078,6 +1078,17 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
             return false;
         }
         mGLPositionInitialized = true;
+    }
+
+    if (mShaderType == GL_VERTEX_SHADER && compileOptions.initGLPointSize)
+    {
+        sh::ShaderVariable var(GL_FLOAT);
+        var.name = "gl_PointSize";
+        if (!InitializeVariables(this, root, {var}, &mSymbolTable, mShaderVersion,
+                                 mExtensionBehavior, false, false))
+        {
+            return false;
+        }
     }
 
     // DeferGlobalInitializers needs to be run before other AST transformations that generate new

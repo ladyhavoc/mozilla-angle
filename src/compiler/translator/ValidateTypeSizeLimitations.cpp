@@ -20,18 +20,17 @@ namespace sh
 namespace
 {
 
-// Arbitrarily enforce that types - even local variables' - declared
-// with a size in bytes of over 2 GB will cause compilation failure.
-constexpr size_t kMaxTypeSizeInBytes = static_cast<size_t>(2) * 1024 * 1024 * 1024;
-
 // Traverses intermediate tree to ensure that the shader does not
 // exceed certain implementation-defined limits on the sizes of types.
 // Some code was copied from the CollectVariables pass.
 class ValidateTypeSizeLimitationsTraverser : public TIntermTraverser
 {
   public:
-    ValidateTypeSizeLimitationsTraverser(TSymbolTable *symbolTable, TDiagnostics *diagnostics)
-        : TIntermTraverser(true, false, false, symbolTable), mDiagnostics(diagnostics)
+    ValidateTypeSizeLimitationsTraverser(const ShBuiltInResources& limits, TSymbolTable *symbolTable, TDiagnostics *diagnostics)
+        : TIntermTraverser(true, false, false, symbolTable),
+          mLimits(limits),
+          mDiagnostics(diagnostics),
+          mTotalPrivateVariablesSize(0)
     {
         ASSERT(diagnostics);
     }
@@ -78,16 +77,43 @@ class ValidateTypeSizeLimitationsTraverser : public TIntermTraverser
             // whether the row-major layout is correctly determined.
             bool isRowMajorLayout = false;
             TraverseShaderVariable(shaderVar, isRowMajorLayout, &visitor);
-            if (layoutEncoder.getCurrentOffset() > kMaxTypeSizeInBytes)
+            if (mLimits.MaxVariableSizeInBytes &&
+                layoutEncoder.getCurrentOffset() > mLimits.MaxVariableSizeInBytes)
             {
                 error(asSymbol->getLine(),
                       "Size of declared variable exceeds implementation-defined limit",
                       asSymbol->getName());
                 return false;
             }
+
+            const bool isPrivate = variableType.getQualifier() == EvqTemporary ||
+                                   variableType.getQualifier() == EvqGlobal ||
+                                   variableType.getQualifier() == EvqConst;
+            if (isPrivate)
+            {
+                if (mLimits.MaxPrivateVariableSizeInBytes && layoutEncoder.getCurrentOffset() > mLimits.MaxPrivateVariableSizeInBytes)
+                {
+                    error(asSymbol->getLine(),
+                          "Size of declared private variable exceeds implementation-defined limit",
+                          asSymbol->getName());
+                    return false;
+                }
+                mTotalPrivateVariablesSize += layoutEncoder.getCurrentOffset();
+            }
         }
 
         return true;
+    }
+
+    void validateTotalPrivateVariableSize()
+    {
+        if (mTotalPrivateVariablesSize > kMaxPrivateVariableSizeInBytes)
+        {
+            mDiagnostics->error(
+                TSourceLoc{},
+                "Total size of declared private variables exceeds implementation-defined limit",
+                "");
+        }
     }
 
   private:
@@ -196,18 +222,23 @@ class ValidateTypeSizeLimitationsTraverser : public TIntermTraverser
         }
     }
 
+    const ShBuiltInResources& mLimits;
     TDiagnostics *mDiagnostics;
     std::vector<int> mLoopSymbolIds;
+
+    size_t mTotalPrivateVariablesSize;
 };
 
 }  // namespace
 
-bool ValidateTypeSizeLimitations(TIntermNode *root,
+bool ValidateTypeSizeLimitations(const ShBuiltInResources& limits,
+                                 TIntermNode *root,
                                  TSymbolTable *symbolTable,
                                  TDiagnostics *diagnostics)
 {
-    ValidateTypeSizeLimitationsTraverser validate(symbolTable, diagnostics);
+    ValidateTypeSizeLimitationsTraverser validate(limits, symbolTable, diagnostics);
     root->traverse(&validate);
+    validate.validateTotalPrivateVariableSize();
     return diagnostics->numErrors() == 0;
 }
 
